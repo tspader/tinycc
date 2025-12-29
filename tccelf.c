@@ -3069,11 +3069,9 @@ static void alloc_sec_names(TCCState *s1, int is_obj)
 }
 
 /* Output an elf .o file */
-static int elf_output_obj(TCCState *s1, const char *filename)
-{
+static void elf_setup(TCCState* s1) {
     Section *s;
-    int i, ret, file_offset;
-    /* Allocate strings for section names */
+    int i, file_offset;
     alloc_sec_names(s1, 1);
     file_offset = (sizeof (ElfW(Ehdr)) + 3) & -4;
     file_offset += s1->nb_sections * sizeof(ElfW(Shdr));
@@ -3084,6 +3082,12 @@ static int elf_output_obj(TCCState *s1, const char *filename)
         if (s->sh_type != SHT_NOBITS)
             file_offset += s->sh_size;
     }
+}
+static int elf_output_obj(TCCState *s1, const char *filename)
+{
+    int ret;
+    /* Allocate strings for section names */
+    elf_setup(s1);
     /* Create the ELF file with name 'filename' */
     ret = tcc_write_elf_file(s1, filename, 0, NULL);
     return ret;
@@ -3103,6 +3107,40 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
 #else
     return elf_output_file(s, filename);
 #endif
+}
+
+/* Output relocated ELF to memory buffer. Must be called after tcc_relocate()
+   with debug info enabled (-g), which keeps sections alive. */
+LIBTCCAPI int tcc_output_relocated_elf_to_mem(TCCState *s1, void **out_buf, unsigned long *out_size)
+{
+    FILE *f;
+    char *buf = NULL;
+    size_t size = 0;
+    int ret, i, file_offset;
+    Section *s;
+
+    if (!s1->do_debug)
+        return tcc_error_noabort("tcc_relocate_elf_to_mem requires debug info (-g)");
+
+    f = open_memstream(&buf, &size);
+    if (!f)
+        return tcc_error_noabort("open_memstream failed");
+
+    elf_setup(s1);
+
+    /* tcc_output_elf writes sections with their current sh_addr values,
+       which are the final relocated addresses after tcc_relocate() */
+    ret = tcc_output_elf(s1, f, 0, NULL);
+
+    fclose(f);
+
+    if (ret == 0) {
+        *out_buf = buf;
+        *out_size = size;
+    } else {
+        tcc_free(buf);
+    }
+    return ret;
 }
 
 ST_FUNC ssize_t full_read(int fd, void *buf, size_t count) {

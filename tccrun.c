@@ -438,9 +438,12 @@ redo:
 #ifdef _WIN64
         s1->run_function_table = win64_add_function_table(s1);
 #endif
-        /* remove local symbols and free sections except symtab */
-        cleanup_symbols(s1);
-        cleanup_sections(s1);
+        /* remove local symbols and free sections except symtab
+           but keep them if debugging so we can serialize relocated ELF */
+        if (!s1->do_debug) {
+            cleanup_symbols(s1);
+            cleanup_sections(s1);
+        }
         goto redo;
     }
 

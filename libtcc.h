@@ -91,6 +91,11 @@ LIBTCCAPI int tcc_run(TCCState *s, int argc, char **argv);
 /* do all relocations (needed before using tcc_get_symbol()) */
 LIBTCCAPI int tcc_relocate(TCCState *s1);
 
+/* output relocated ELF to memory (call after tcc_relocate with -g).
+   Returns 0 on success, -1 on error. Symbols have final addresses.
+   *out_buf receives a malloc'd buffer that caller must free. */
+LIBTCCAPI int tcc_output_relocated_elf_to_mem(TCCState *s, void **out_buf, unsigned long *out_size);
+
 /* return symbol value or NULL if not found */
 LIBTCCAPI void *tcc_get_symbol(TCCState *s, const char *name);
 

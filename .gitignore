@@ -68,3 +68,11 @@ tests/vla_test
 tests/hello
 tests/tests2/fred.txt
 libtcc.dylib
+.cache
+build.sh
+compile_commands.json
+test_dependencies*
+test_deps.c
+dependencies_test.d
+libtcc.txt
+build/
