@@ -3114,19 +3114,30 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
 LIBTCCAPI int tcc_output_relocated_elf_to_mem(TCCState *s1, void **out_buf, unsigned long *out_size)
 {
     FILE *f;
-    char *buf = NULL;
-    size_t size = 0;
-    int ret, i, file_offset;
+    char *buf;
+    size_t size;
+    int ret, i;
     Section *s;
 
     if (!s1->do_debug)
         return tcc_error_noabort("tcc_relocate_elf_to_mem requires debug info (-g)");
 
-    f = open_memstream(&buf, &size);
-    if (!f)
-        return tcc_error_noabort("open_memstream failed");
-
     elf_setup(s1);
+
+    /* Calculate total size from last non-NOBITS section */
+    size = 0;
+    for (i = 1; i < s1->nb_sections; i++) {
+        s = s1->sections[i];
+        if (s->sh_type != SHT_NOBITS && s->sh_offset + s->sh_size > size)
+            size = s->sh_offset + s->sh_size;
+    }
+
+    buf = tcc_malloc(size);
+    f = fmemopen(buf, size, "wb");
+    if (!f) {
+        tcc_free(buf);
+        return tcc_error_noabort("fmemopen failed");
+    }
 
     /* tcc_output_elf writes sections with their current sh_addr values,
        which are the final relocated addresses after tcc_relocate() */
