@@ -3113,6 +3113,9 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
    with debug info enabled (-g), which keeps sections alive. */
 LIBTCCAPI int tcc_output_relocated_elf_to_mem(TCCState *s1, void **out_buf, unsigned long *out_size)
 {
+#ifdef TCC_TARGET_PE
+    return 1;
+#else
     FILE *f;
     char *buf;
     size_t size;
@@ -3152,6 +3155,7 @@ LIBTCCAPI int tcc_output_relocated_elf_to_mem(TCCState *s1, void **out_buf, unsi
         tcc_free(buf);
     }
     return ret;
+#endif
 }
 
 ST_FUNC ssize_t full_read(int fd, void *buf, size_t count) {
