@@ -76,3 +76,6 @@ test_deps.c
 dependencies_test.d
 libtcc.txt
 build/
+/.spn/store
+/.spn/tools
+/toolchain
