@@ -27,8 +27,9 @@ MINGW_TRIPLE = x86_64-w64-mingw32
 MINGW_CC = x86_64-w64-mingw32-gcc
 MINGW_AR = x86_64-w64-mingw32-ar
 
-COSMO_CC = $(ROOT)/toolchain/bin/x86_64-unknown-cosmo-cc
-COSMO_AR = $(ROOT)/toolchain/bin/x86_64-unknown-cosmo-ar
+COSMO_CC      = $(SPN)/tools/cosmocc/bin/x86_64-unknown-cosmo-cc
+COSMO_AR      = $(SPN)/tools/cosmocc/bin/x86_64-unknown-cosmo-ar
+COSMO_OBJCOPY = $(SPN)/tools/cosmocc/bin/x86_64-unknown-cosmo-objcopy
 
 # ---- phony ----
 
@@ -236,9 +237,10 @@ $(MD_STORE)/bin/hello.exe: $(MD_BUILD)/libtcc.dll $(MX_BUILD)/runtime.stamp
 	@echo "--- built mingw-shared (run hello.exe on windows to test) ---"
 
 # ============================================================
-#  Cosmopolitan (APE) — static
-#  Builds TCC as an Actually Portable Executable using cosmo libc.
-#  The resulting TCC still targets regular Linux x86_64.
+#  Cosmopolitan (APE) — dual ELF+PE libtcc
+#  Builds two libtcc.o variants (ELF-targeting and PE-targeting),
+#  prefixes PE symbols, and links both into one APE binary.
+#  Runtime support libraries are built for both targets.
 # ============================================================
 
 CS_BUILD := $(BUILD)/cosmo-static
@@ -246,31 +248,75 @@ CS_STORE := $(STORE)/x86_64-linux-ape
 
 cosmo: $(CS_STORE)/bin/hello.com
 
-$(CS_BUILD)/libtcc.a: $(ROOT)/config.h
+# --- ELF-targeting libtcc ---
+
+$(CS_BUILD)/libtcc_elf.o: $(ROOT)/config.h
 	@mkdir -p $(CS_BUILD)
 	$(COSMO_CC) $(CFLAGS) $(TCCFLAGS) -DONE_SOURCE=1 \
-		-c $(ROOT)/libtcc.c -o $(CS_BUILD)/libtcc.o
-	$(COSMO_AR) rcs $@ $(CS_BUILD)/libtcc.o
+		-c $(ROOT)/libtcc.c -o $@
 
-$(CS_BUILD)/tcc.com: $(CS_BUILD)/libtcc.a
+# --- PE-targeting libtcc (cross-compiler, runs on host, emits PE) ---
+
+$(CS_BUILD)/libtcc_pe.o: $(ROOT)/config.h
+	@mkdir -p $(CS_BUILD)
+	$(COSMO_CC) $(CFLAGS) $(TCCFLAGS) -DONE_SOURCE=1 \
+		-DTCC_TARGET_PE -DTCC_TARGET_X86_64 \
+		-c $(ROOT)/libtcc.c -o $@
+
+# Prefix all exported symbols in the PE variant so both can coexist
+$(CS_BUILD)/libtcc_pe_prefixed.o: $(CS_BUILD)/libtcc_pe.o
+	nm $< | grep ' T ' | awk '{print $$3 " pe_" $$3}' > $(CS_BUILD)/pe_renames.txt
+	$(COSMO_OBJCOPY) --redefine-syms=$(CS_BUILD)/pe_renames.txt $< $@
+
+# --- Combined static library ---
+
+$(CS_BUILD)/libtcc.a: $(CS_BUILD)/libtcc_elf.o $(CS_BUILD)/libtcc_pe_prefixed.o
+	$(COSMO_AR) rcs $@ $^
+
+# --- Build cross-tcc executables for compiling runtimes ---
+#     These run on the host to compile libtcc1.a for each target.
+
+$(CS_BUILD)/tcc-elf.com: $(CS_BUILD)/libtcc_elf.o
 	$(COSMO_CC) $(CFLAGS) $(TCCFLAGS) -DONE_SOURCE=0 \
-		$(ROOT)/tcc.c -o $@ -L$(CS_BUILD) -ltcc -lm -ldl -lpthread
+		$(ROOT)/tcc.c -o $@ $(CS_BUILD)/libtcc_elf.o -lm -ldl -lpthread
 
-$(CS_BUILD)/runtime.stamp: $(CS_BUILD)/tcc.com
-	$(call build_runtime,$(CS_BUILD)/tcc.com,$(CS_BUILD)/rt,$(ROOT),linux)
+$(CS_BUILD)/tcc-pe.com: $(CS_BUILD)/libtcc_pe.o
+	$(COSMO_CC) $(CFLAGS) $(TCCFLAGS) -DONE_SOURCE=0 \
+		-DTCC_TARGET_PE -DTCC_TARGET_X86_64 \
+		$(ROOT)/tcc.c -o $@ $(CS_BUILD)/libtcc_pe.o -lm -ldl -lpthread
+
+# --- ELF runtime ---
+
+$(CS_BUILD)/rt-elf.stamp: $(CS_BUILD)/tcc-elf.com
+	$(call build_runtime,$(CS_BUILD)/tcc-elf.com,$(CS_BUILD)/rt-elf,$(ROOT),linux)
 	@touch $@
 
-$(CS_STORE)/bin/hello.com: $(CS_BUILD)/libtcc.a $(CS_BUILD)/runtime.stamp
-	@mkdir -p $(CS_STORE)/bin $(CS_STORE)/lib/tcc/include $(CS_STORE)/include
+# --- PE runtime ---
+
+$(CS_BUILD)/rt-pe.stamp: $(CS_BUILD)/tcc-pe.com
+	$(call build_runtime,$(CS_BUILD)/tcc-pe.com,$(CS_BUILD)/rt-pe,$(ROOT)/win32,win32)
+	@touch $@
+
+# --- Install to store ---
+
+$(CS_STORE)/bin/hello.com: $(CS_BUILD)/libtcc.a $(CS_BUILD)/rt-elf.stamp $(CS_BUILD)/rt-pe.stamp
+	@mkdir -p $(CS_STORE)/bin $(CS_STORE)/include
+	@mkdir -p $(CS_STORE)/lib/tcc/elf/include
+	@mkdir -p $(CS_STORE)/lib/tcc/pe/include
 	cp $(CS_BUILD)/libtcc.a $(CS_STORE)/lib/
 	cp $(ROOT)/libtcc.h $(CS_STORE)/include/
-	cp $(CS_BUILD)/rt/lib/libtcc1.a $(CS_STORE)/lib/tcc/
-	cp $(CS_BUILD)/rt/lib/*.o $(CS_STORE)/lib/tcc/ 2>/dev/null || true
-	cp -r $(ROOT)/include/. $(CS_STORE)/lib/tcc/include/
+	cp $(CS_BUILD)/rt-elf/lib/libtcc1.a $(CS_STORE)/lib/tcc/elf/
+	cp $(CS_BUILD)/rt-elf/lib/*.o $(CS_STORE)/lib/tcc/elf/ 2>/dev/null || true
+	cp -r $(ROOT)/include/. $(CS_STORE)/lib/tcc/elf/include/
+	cp $(CS_BUILD)/rt-pe/lib/libtcc1.a $(CS_STORE)/lib/tcc/pe/
+	cp $(CS_BUILD)/rt-pe/lib/*.o $(CS_STORE)/lib/tcc/pe/ 2>/dev/null || true
+	cp -r $(ROOT)/include/. $(CS_STORE)/lib/tcc/pe/include/
+	cp -r $(ROOT)/win32/include/. $(CS_STORE)/lib/tcc/pe/include/
+	cp $(ROOT)/win32/lib/*.def $(CS_STORE)/lib/tcc/pe/
 	$(COSMO_CC) $(CFLAGS) -I$(CS_STORE)/include $(SPN)/hello.c \
 		-L$(CS_STORE)/lib -ltcc -lm -ldl -lpthread -o $@
-	@echo "--- testing cosmo-static ---"
-	$@ $(CS_STORE)/lib/tcc
+	@echo "--- testing cosmo ELF JIT ---"
+	$@ $(CS_STORE)/lib/tcc/elf
 
 # ============================================================
 #  MSVC — run build-msvc.ps1 on piotr
